@@ -136,9 +136,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
 
-    # 1. 返回菜单
+    # 1. 返回菜单（修复版：直接重新调用 start 发全新卡片）
     if data == "返回菜单":
-        await query.edit_message_text("📂 请选择业务：", reply_markup=get_main_keyboard())
+        await query.message.delete() # 删掉旧卡片
+        await start(update, context) # 重新发一遍完整首页
         return
 
     # 2. 充值方式选择
@@ -175,6 +176,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # 4. 余额充足，直接扣费并报单
     deduct_balance(user_id, price)
     new_balance = get_balance(user_id)
     user = update.effective_user
@@ -260,12 +262,3 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ AI 请求失败。")
         context.user_data.pop('ai_state', None)
         return
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("recharge", recharge_command))
-    application.add_handler(CommandHandler("ai", ai_command))
-    application.add_handler(CallbackQueryHandler(button_click))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    return application
