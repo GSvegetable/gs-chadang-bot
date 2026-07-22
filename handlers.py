@@ -104,8 +104,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"全网最大的查档机器人\n\n"
         f"👤 您的用户名：{username_display}\n"
         f"🆔 您的ID：{user_id}\n"
-        f"💰 您的余额：{int(balance)} USDT\n"
-        f"        {int(balance)} 人民币\n\n"
+        f"💰 您的余额：{int(balance)} USDT\n\n"
         f"公群链接 <a href=\"https://telegram.me/+cmzARoDq7WM0NTY1\">达利34</a>\n"
         f"加入频道 <a href=\"https://t.me/dddvww\">老枭朋友圈</a>\n"
         f"联系老板 @vipcdw\n"
@@ -126,9 +125,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📂 请选择业务：", reply_markup=get_main_keyboard())
         return
 
-    # 2. 充值方式选择（必须优先匹配，否则会误判为业务未开放）
+    # 2. 充值方式选择
     if data == "rmb_pay":
-        # 人民币直接跳转，不发送任何提示文字
         await query.edit_message_text(
             f"<a href=\"https://t.me/vipcdw\">点击联系老板进行人民币充值</a>",
             parse_mode='HTML', disable_web_page_preview=True
@@ -140,7 +138,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("💰 请直接输入充值金额：（纯数字）", reply_markup=None)
         return
 
-    # 3. 常规业务扣费（机主实名、证件照片）
+    # 3. 常规业务扣费
     service_name = data
     if service_name not in PRICES:
         await query.edit_message_text("⚙️ 业务暂未开放。", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
@@ -150,12 +148,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = get_balance(user_id)
 
     if balance < price:
-        # 余额不足时，自动弹出底部键盘
         await query.edit_message_text(
             "余额不足 请点击底部菜单［充值］",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]])
         )
-        # 用新消息带出键盘，去除多余的提示文字
         await context.bot.send_message(
             chat_id=user_id,
             text=" ",
