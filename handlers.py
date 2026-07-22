@@ -17,7 +17,6 @@ from db import init_db, get_balance, add_balance, deduct_balance
 init_db()
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# ================= Flask 保活和回调 =================
 app = Flask(__name__)
 @app.route('/')
 def home():
@@ -27,7 +26,7 @@ def run_flask():
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# ================= OkPay 签名和生成订单 =================
+# ================= OkPay 签名与订单生成 =================
 def build_okpay_sign(params, token):
     filtered = {k: v for k, v in params.items() if k != 'sign' and v is not None and v != ''}
     sorted_keys = sorted(filtered.keys())
@@ -63,7 +62,6 @@ def create_okpay_order(amount, user_id):
     except Exception as e:
         return {"success": False, "msg": str(e)}
 
-# ================= OkPay Webhook 回调 =================
 @app.route('/okpay_callback', methods=['POST'])
 def okpay_callback():
     try:
@@ -84,21 +82,17 @@ def okpay_callback():
     except Exception:
         return "error", 500
 
-# ================= 菜单按钮（按键） =================
+# ================= 菜单与底部键盘 =================
 def get_main_keyboard():
-    # 只有这两个业务按钮
-    keyboard = [
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("机主实名", callback_data="机主实名")],
         [InlineKeyboardButton("证件照片", callback_data="证件照片")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
-# ================= 底部键盘（输入框下方） =================
 def get_reply_keyboard():
-    # 换成了 充值 和 AI匹配
     return ReplyKeyboardMarkup([["充值"], ["AI匹配"]], resize_keyboard=True)
 
-# ================= 启动首页 =================
+# ================= 首页 /start =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_obj = update.effective_user
@@ -107,32 +101,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_text = (
         f"欢迎使用枭雄天眼查询机器人\n"
-        f"全网最大的查档机器人\n"
-        f"机器人开发者：@gsyxyc\n"
-        f"您的用户名：{username_display}\n"
-        f"您的余额：{balance}u\n\n"
-        f"<a href=\"https://telegram.me/+cmzARoDq7WM0NTY1\">公群链接 达利34</a>\n"
-        f"<a href=\"https://t.me/dddvww\">加入频道 老枭朋友圈</a>\n"
+        f"全网最大的查档机器人\n\n"
+        f"👤 您的用户名：{username_display}\n"
+        f"🆔 您的ID：{user_id}\n"
+        f"💰 您的余额：{balance}u\n"
+        f"🤖 bot开发：@gsyxyc\n\n"
+        f"公群链接 <a href=\"https://telegram.me/+cmzARoDq7WM0NTY1\">达利34</a>\n"
+        f"加入频道 <a href=\"https://t.me/dddvww\">老枭朋友圈</a>\n"
         f"联系老板 @vipcdw"
     )
 
-    # 发送欢迎语（带内联按钮），并唤醒底部键盘
     await update.message.reply_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
     await update.message.reply_text("🟢 底部功能栏已开启", reply_markup=get_reply_keyboard())
 
-# ================= 按钮业务逻辑 =================
+# ================= 内联按钮点击处理 =================
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     data = query.data
 
+    # 1. 返回菜单
     if data == "返回菜单":
         await query.edit_message_text("📂 请选择业务：", reply_markup=get_main_keyboard())
         return
 
+    # 2. 充值页面的“人民币”按钮
+    if data == "rmb_pay":
+        await query.edit_message_text(
+            "💸 请通过以下方式联系老板进行人民币充值：\n\n@vipcdw",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回菜单", callback_data="返回菜单")]])
+        )
+        return
+
+    # 3. 充值页面的“OkPay”按钮
+    if data == "okpay_pay":
+        await query.edit_message_text("💳 正在生成 OkPay 支付订单，请稍候...", reply_markup=None)
+        # 这里需要重新获取用户输入的金额，为了简化，我们让用户重新输入金额或者返回上一级
+        # 目前设计为：点击OkPay后，重新进入输入金额状态
+        context.user_data['pending_charge'] = 'waiting_amount'
+        await query.message.reply_text("💰 请输入要充值的金额（纯数字，如 20）：", reply_markup=ReplyKeyboardRemove())
+        return
+
+    # 4. 常规业务扣费（机主实名、证件照片）
     service_name = data
-    # 检查是否在价格表里（机主实名/证件照片）
     if service_name not in PRICES:
         await query.edit_message_text("⚙️ 业务暂未开放。", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
         return
@@ -154,7 +166,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(f"✅ 报单成功！\n业务：{service_name}\n扣除金额：{price} USDT\n剩余余额：{new_balance} USDT", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
 
-# ================= 消息处理（底部门槛） =================
+# ================= 文字消息处理 =================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
@@ -167,11 +179,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. 底部键盘 -> 充值
     if text == "充值":
-        context.user_data['pending_charge'] = 'waiting_amount'
-        await update.message.reply_text("💰 请输入要充值的金额（纯数字，如 20）：", reply_markup=ReplyKeyboardRemove())
+        context.user_data['pending_charge'] = 'select_method'
+        await update.message.reply_text(
+            "选择充值方式",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("OkPay", callback_data="okpay_pay")],
+                [InlineKeyboardButton("人民币", callback_data="rmb_pay")]
+            ])
+        )
         return
 
-    # 3. 处理充值金额输入
+    # 3. 处理 OkPay 充值金额输入
     if context.user_data.get('pending_charge') == 'waiting_amount':
         try:
             amount = int(text)
