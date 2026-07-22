@@ -104,15 +104,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"全网最大的查档机器人\n\n"
         f"👤 您的用户名：{username_display}\n"
         f"🆔 您的ID：{user_id}\n"
-        f"💰 您的余额：{balance}u\n\n"
+        f"💰 您的余额：{int(balance)} USDT {int(balance)} 人民币\n\n"
         f"公群链接 <a href=\"https://telegram.me/+cmzARoDq7WM0NTY1\">达利34</a>\n"
         f"加入频道 <a href=\"https://t.me/dddvww\">老枭朋友圈</a>\n"
         f"联系老板 @vipcdw\n"
-        f"bot开发：@gsyxyc"
+        f"bot开发 @gsyxyc"
     )
 
     await update.message.reply_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
-    # 注意：不再发送底部功能栏开启的提示
+    # 不再发送底部功能栏开启提示
 
 # ================= 内联按钮点击处理 =================
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,21 +125,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📂 请选择业务：", reply_markup=get_main_keyboard())
         return
 
-    # 1. 人民币充值
-    if data == "rmb_pay":
-        await query.edit_message_text(
-            f"点击下方链接联系老板进行人民币充值：\n\n<a href=\"https://t.me/vipcdw\">@vipcdw</a>",
-            parse_mode='HTML', disable_web_page_preview=True
-        )
-        return
-
-    # 2. OkPay 充值
-    if data == "okpay_pay":
-        context.user_data['pending_charge'] = 'waiting_amount'
-        await query.edit_message_text("💰 请直接输入充值金额：（纯数字）", reply_markup=None)
-        return
-
-    # 3. 常规业务扣费
+    # 常规业务扣费
     service_name = data
     if service_name not in PRICES:
         await query.edit_message_text("⚙️ 业务暂未开放。", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
@@ -147,8 +133,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     price = PRICES[service_name]
     balance = get_balance(user_id)
+
     if balance < price:
-        await query.edit_message_text(f"❌ 余额不足。请点底部菜单【充值】", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
+        # 余额不足时，弹出一条提示并带上底部键盘
+        await query.edit_message_text(
+            "余额不足 请点击底部菜单［充值］",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]])
+        )
+        # 发送一条新消息来唤起底部键盘，这样用户可以直接点击“充值”
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="🔽 请使用底部菜单进行充值或AI匹配",
+            reply_markup=get_reply_keyboard()
+        )
         return
 
     deduct_balance(user_id, price)
@@ -170,7 +167,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. AI匹配
     if text == "AI匹配":
         context.user_data['ai_state'] = 'awaiting_input'
-        await update.message.reply_text("🤖 请发送您想查询的描述，AI会自动为您匹配业务。")
+        await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
         return
 
     # 2. 充值入口
@@ -180,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "选择充值方式",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("OkPay", callback_data="okpay_pay")],
-                [InlineKeyboardButton("人民币", callback_data="rmb_pay")]
+                [InlineKeyboardButton("人民币", url="https://t.me/vipcdw")]  # 直接跳转
             ])
         )
         return
@@ -190,10 +187,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             amount = int(text)
             if amount <= 0: raise ValueError
-            # 发送“正在生成...”并保存消息对象以便稍后删除
             processing_msg = await update.message.reply_text("⏳ 正在生成支付订单，请稍候...")
             result = create_okpay_order(amount, user_id)
-            # 无论成功与否，先删除“正在生成...”和“底部功能栏已恢复”
             try:
                 await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=processing_msg.message_id)
             except:
@@ -206,7 +201,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"❌ 生成订单失败：{result['msg']}")
             
             context.user_data.pop('pending_charge', None)
-            # 不再恢复底部键盘
         except ValueError:
             await update.message.reply_text("❌ 请输入有效整数。")
         return
