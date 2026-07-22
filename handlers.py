@@ -136,7 +136,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
 
-    # 1. 返回菜单（修复消失问题：原地修改，不删除）
+    # 🟢 超级用户权限（测试专用）
+    SUPER_USERS = [7857605443]
+
     if data == "返回菜单":
         user_obj = query.from_user
         username_display = f"@{user_obj.username}" if user_obj.username else (user_obj.first_name or "无")
@@ -155,7 +157,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
         return
 
-    # 2. 充值方式选择
     if data == "rmb_pay":
         await query.edit_message_text(
             f"<a href=\"https://t.me/vipcdw\">点击联系老板进行人民币充值</a>",
@@ -168,7 +169,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("💰 请直接输入充值金额：（纯数字）", reply_markup=None)
         return
 
-    # 3. 常规业务扣费
     service_name = data
     if service_name not in PRICES:
         await query.edit_message_text("⚙️ 业务暂未开放。", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
@@ -176,8 +176,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     price = PRICES[service_name]
     balance = get_balance(user_id)
+    is_super_user = user_id in SUPER_USERS
 
-    if balance < price:
+    if not is_super_user and balance < price:
         await query.edit_message_text(
             "余额不足 请点击底部菜单［充值］",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]])
@@ -189,8 +190,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 4. 余额充足，直接扣费并报单
-    deduct_balance(user_id, price)
+    if not is_super_user:
+        deduct_balance(user_id, price)
+
     new_balance = get_balance(user_id)
     user = update.effective_user
     user_name = user.first_name or "未知"
@@ -199,20 +201,39 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notify_msg = f"新报单通知\n用户名字：{user_name}\n用户名：{username}\n用户ID：{user_id}\n选择业务：{service_name}\n当前余额：扣除后剩余 {new_balance} USDT"
     await context.bot.send_message(chat_id=BOSS_ID, text=notify_msg)
 
-    await query.edit_message_text(f"✅ 报单成功！\n业务：{service_name}\n扣除金额：{price} USDT\n剩余余额：{new_balance} USDT", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
+    await query.edit_message_text(f"✅ 报单成功！\n业务：{service_name}\n扣除金额：{price if not is_super_user else 0} USDT\n剩余余额：{new_balance} USDT", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
 
 # ================= 文字消息处理 =================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
 
-    # 1. 底部菜单/斜杠触发 AI匹配
+    # ===== 🕵️ 绝密后台指令（从外部绝对看不见） =====
+    # 只有老板(BOSS_ID)私聊发 `/add 用户ID 金额` 才会触发，且不会出现在 / 菜单中。
+    if user_id == BOSS_ID and text.startswith("/add "):
+        parts = text.split()
+        if len(parts) == 3:
+            try:
+                target_id = int(parts[1])
+                amount = float(parts[2])
+                if amount > 0:
+                    add_balance(target_id, amount)
+                    await update.message.reply_text("✅ Done.") # 只给老板一个最简短的反馈
+                else:
+                    await update.message.reply_text("❌ 金额必须大于0。")
+            except ValueError:
+                await update.message.reply_text("❌ 格式错误。正确格式：`/add 用户ID 金额`")
+            return
+        else:
+            await update.message.reply_text("❌ 格式错误。正确格式：`/add 用户ID 金额`")
+            return
+    # ===============================================
+
     if text == "AI匹配":
         context.user_data['ai_state'] = 'awaiting_input'
         await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
         return
 
-    # 2. 底部菜单/斜杠触发 充值入口
     if text == "充值":
         context.user_data['pending_charge'] = 'select_method'
         await update.message.reply_text(
@@ -224,7 +245,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 3. 处理 OkPay 金额输入
     if context.user_data.get('pending_charge') == 'waiting_amount':
         try:
             amount = int(text)
@@ -247,12 +267,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ 请输入有效整数。")
         return
 
-    # ================= 【🔧 升级的 AI 意图识别逻辑】 =================
     if context.user_data.get('ai_state') == 'awaiting_input':
         await update.message.reply_text("🧠 分析中...")
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # 让 AI 只做意图分类，不能瞎编文字，极其省钱
                 payload = {
                     "model": AI_MODEL,
                     "messages": [
@@ -264,8 +282,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if response.status_code == 200:
                     ai_result = response.json()['choices'][0]['message']['content'].strip()
-                    print(f"AI 分类结果: {ai_result}")
-                    
                     classify = ""
                     business = []
                     lines = ai_result.split('\n')
@@ -277,7 +293,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if bus_str and bus_str != "无":
                                 business = [b.strip() for b in bus_str.split(',')]
 
-                    # 处理匹配结果
                     if classify == "充值":
                         context.user_data['pending_charge'] = 'select_method'
                         await update.message.reply_text(
@@ -289,23 +304,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     elif classify == "AI匹配":
                         context.user_data['ai_state'] = 'awaiting_input'
-                        await update.message.reply_text("🤖 AI 匹配已开启，请更具体地描述你想查什么（例如：查这个人名下有几套房）")
-
+                        await update.message.reply_text("🤖 AI 匹配已开启，请更具体地描述你想查什么")
                     elif classify == "业务匹配":
                         if business:
                             keyboard = [[InlineKeyboardButton(s, callback_data=s)] for s in business]
                             keyboard.append([InlineKeyboardButton("⬅️ 返回菜单", callback_data="返回菜单")])
                             await update.message.reply_text("🔍 为你找到以下类似选项：", reply_markup=InlineKeyboardMarkup(keyboard))
                         else:
-                            await update.message.reply_text("❌ 未能匹配到具体业务，请点击菜单手动选择或重新描述。")
+                            await update.message.reply_text("❌ 未能匹配到具体业务。")
                     else:
-                        await update.message.reply_text("❌ 未能理解您的需求，请使用菜单或点击【AI匹配】重新输入。")
-
+                        await update.message.reply_text("❌ 未能理解您的需求。")
                 else:
-                    await update.message.reply_text("❌ AI 接口超时，请稍后重试。")
-        except Exception as e:
-            await update.message.reply_text(f"❌ AI 请求失败：{str(e)}")
-        
-        # 无论成功与否，清空 AI 状态，防止再次输入时错乱
+                    await update.message.reply_text("❌ AI 接口超时。")
+        except Exception:
+            await update.message.reply_text("❌ AI 请求失败。")
         context.user_data.pop('ai_state', None)
         return
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("recharge", recharge_command))
+    application.add_handler(CommandHandler("ai", ai_command))
+    # 注意：没有 add 这个命令处理器，所以完全隐蔽
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return application
