@@ -113,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
 
-# ================= 新增斜杠指令 /recharge =================
+# ================= 斜杠指令 /recharge =================
 async def recharge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_charge'] = 'select_method'
     await update.message.reply_text(
@@ -124,7 +124,7 @@ async def recharge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
 
-# ================= 新增斜杠指令 /ai =================
+# ================= 斜杠指令 /ai =================
 async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['ai_state'] = 'awaiting_input'
     await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
@@ -136,10 +136,23 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
 
-    # 1. 返回菜单（修复版：直接重新调用 start 发全新卡片）
+    # 1. 返回菜单（修复消失问题：原地修改，不删除）
     if data == "返回菜单":
-        await query.message.delete() # 删掉旧卡片
-        await start(update, context) # 重新发一遍完整首页
+        user_obj = query.from_user
+        username_display = f"@{user_obj.username}" if user_obj.username else (user_obj.first_name or "无")
+        balance = get_balance(user_id)
+        welcome_text = (
+            f"欢迎使用枭雄天眼查询机器人\n"
+            f"全网最大的查档机器人\n\n"
+            f"👤 您的用户名：{username_display}\n"
+            f"🆔 您的ID：{user_id}\n"
+            f"💰 您的余额：{int(balance)} USDT\n\n"
+            f"公群链接 <a href=\"https://telegram.me/+cmzARoDq7WM0NTY1\">达利34</a>\n"
+            f"加入频道 <a href=\"https://t.me/dddvww\">老枭朋友圈</a>\n"
+            f"联系老板 @vipcdw\n"
+            f"bot开发 @gsyxyc"
+        )
+        await query.edit_message_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
         return
 
     # 2. 充值方式选择
@@ -234,31 +247,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ 请输入有效整数。")
         return
 
-    # 4. AI 输入处理
+    # ================= 【🔧 升级的 AI 意图识别逻辑】 =================
     if context.user_data.get('ai_state') == 'awaiting_input':
         await update.message.reply_text("🧠 分析中...")
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
+                # 让 AI 只做意图分类，不能瞎编文字，极其省钱
                 payload = {
                     "model": AI_MODEL,
                     "messages": [
-                        {"role": "system", "content": "你是一个业务匹配助手，只从[机主实名, 证件照片]中匹配1-2项，返回名称用逗号隔开，否则返回无匹配。"},
+                        {"role": "system", "content": "你是一个机器人意图识别助手。你的任务是理解用户需求，并将其归类。严格按以下格式回复，不要有多余的文字。\n意图分类：\"充值\"（如果用户提到没钱、充值、怎么付钱、余额不足、充u），\"AI匹配\"（如果用户问怎么用、这是什么、瞎聊），\"业务匹配\"（如果用户想查人、查车、查公司等）。\n业务匹配项：仅在意图为\"业务匹配\"时，从列表[\"机主实名\", \"证件照片\"]中选择1-2个最符合的，并用逗号分隔。否则填\"无\"。"},
                         {"role": "user", "content": text}
                     ]
                 }
                 response = await client.post(AI_BASE_URL, json=payload, headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"})
+                
                 if response.status_code == 200:
                     ai_result = response.json()['choices'][0]['message']['content'].strip()
-                    valid_services = [i.strip() for i in ai_result.replace("，", ",").split(",") if i.strip() in PRICES]
-                    if valid_services:
-                        keyboard = [[InlineKeyboardButton(s, callback_data=s)] for s in valid_services]
-                        keyboard.append([InlineKeyboardButton("⬅️ 返回菜单", callback_data="返回菜单")])
-                        await update.message.reply_text("🔍 为你找到以下类似选项：", reply_markup=InlineKeyboardMarkup(keyboard))
+                    print(f"AI 分类结果: {ai_result}")
+                    
+                    classify = ""
+                    business = []
+                    lines = ai_result.split('\n')
+                    for line in lines:
+                        if line.startswith("意图分类："):
+                            classify = line.replace("意图分类：", "").strip().strip('"')
+                        if line.startswith("业务匹配项："):
+                            bus_str = line.replace("业务匹配项：", "").strip()
+                            if bus_str and bus_str != "无":
+                                business = [b.strip() for b in bus_str.split(',')]
+
+                    # 处理匹配结果
+                    if classify == "充值":
+                        context.user_data['pending_charge'] = 'select_method'
+                        await update.message.reply_text(
+                            "选择充值方式",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("OkPay", callback_data="okpay_pay")],
+                                [InlineKeyboardButton("人民币", url="https://t.me/vipcdw")]
+                            ])
+                        )
+                    elif classify == "AI匹配":
+                        context.user_data['ai_state'] = 'awaiting_input'
+                        await update.message.reply_text("🤖 AI 匹配已开启，请更具体地描述你想查什么（例如：查这个人名下有几套房）")
+
+                    elif classify == "业务匹配":
+                        if business:
+                            keyboard = [[InlineKeyboardButton(s, callback_data=s)] for s in business]
+                            keyboard.append([InlineKeyboardButton("⬅️ 返回菜单", callback_data="返回菜单")])
+                            await update.message.reply_text("🔍 为你找到以下类似选项：", reply_markup=InlineKeyboardMarkup(keyboard))
+                        else:
+                            await update.message.reply_text("❌ 未能匹配到具体业务，请点击菜单手动选择或重新描述。")
                     else:
-                        await update.message.reply_text("❌ 未能匹配到业务。")
+                        await update.message.reply_text("❌ 未能理解您的需求，请使用菜单或点击【AI匹配】重新输入。")
+
                 else:
-                    await update.message.reply_text("❌ AI 超时。")
-        except Exception:
-            await update.message.reply_text("❌ AI 请求失败。")
+                    await update.message.reply_text("❌ AI 接口超时，请稍后重试。")
+        except Exception as e:
+            await update.message.reply_text(f"❌ AI 请求失败：{str(e)}")
+        
+        # 无论成功与否，清空 AI 状态，防止再次输入时错乱
         context.user_data.pop('ai_state', None)
         return
