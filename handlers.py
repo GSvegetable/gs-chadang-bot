@@ -113,6 +113,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(welcome_text, parse_mode='HTML', disable_web_page_preview=True, reply_markup=get_main_keyboard())
 
+# ================= 新增斜杠指令 /recharge =================
+async def recharge_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['pending_charge'] = 'select_method'
+    await update.message.reply_text(
+        "选择充值方式",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("OkPay", callback_data="okpay_pay")],
+            [InlineKeyboardButton("人民币", url="https://t.me/vipcdw")]
+        ])
+    )
+
+# ================= 新增斜杠指令 /ai =================
+async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['ai_state'] = 'awaiting_input'
+    await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
+
 # ================= 内联按钮点击处理 =================
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -175,13 +191,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
 
-    # 1. AI匹配
+    # 1. 底部菜单/斜杠触发 AI匹配
     if text == "AI匹配":
         context.user_data['ai_state'] = 'awaiting_input'
         await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
         return
 
-    # 2. 充值入口
+    # 2. 底部菜单/斜杠触发 充值入口
     if text == "充值":
         context.user_data['pending_charge'] = 'select_method'
         await update.message.reply_text(
@@ -244,3 +260,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ AI 请求失败。")
         context.user_data.pop('ai_state', None)
         return
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("recharge", recharge_command))
+    application.add_handler(CommandHandler("ai", ai_command))
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return application
