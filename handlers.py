@@ -256,9 +256,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ================= 【修复点】括号和逻辑全部重新严谨检查过 =================
     if context.user_data.get('pending_charge') == 'waiting_amount':
         try:
             amount = int(text)
             if amount <= 0: raise ValueError
+            
+            # 修复了这里所有可能掉括号的环节
             processing_msg = await update.message.reply_text("⏳ 正在生成支付订单，请稍候...")
-            result = create_okpay_order(
+            result = create_okpay_order(amount, user_id)
+            
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=processing_msg.message_id)
+            except:
+                pass
+            
+            if result["success"]:
+                keyboard = [[InlineKeyboardButton("打开ok钱包完成支付", url=result["pay_url"])]]
+                await update.message.reply_text(f"✅ 订单已生成！金额：{amount} USDT", reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await update.message.reply_text(f"❌ 生成订单失败：{result['msg']}")
+            
+            context.user_data.pop('pending_charge', None)
+        except ValueError:
+            await update.message.reply_text("❌ 请输入有效整数。")
+        return
+
+    if context.user_data.get('ai_state') == 'awaiting_input':
+        await update.message.reply_text("🧠 分析中...")
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                payload = {
+                    "model": AI_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "你是一个机器人意图识别助手。你的任务是理解用户需求，并将其归类。严格按以下格式回复，不要有多余的文字。\n意图分类：\"充值\"（如果用户提到没钱、充值、怎么付钱、余额不足、充u），\"AI匹配\"（如果用户问怎么用、这是什么、瞎聊），\"业务匹配\"（如果用户想查人、查车、查公司等）。\n业务匹配项：仅在意图为\"业务匹配\"时，从列表[\"机主实名\", \"证件照片\"]中选择1-2个最符合的，并用逗号分隔。否则填\"无\"。"},
+                        {"role": "user", "content": text}
+                    ]
+                }
+                response = await client.post(AI_BASE_URL, json=payload, headers={"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"})
+                
+                if response.status_code == 200:
+                    ai_result = response.json()['choices'][0]['message']['content'].strip()
+                    classify = ""
+                    business = []
+                    lines = ai_result.split('\n')
+                    for line in lines:
+                        if line.startswith("意图分类："):
+                            classify = line.replace("意图分类：", "").strip().strip('"')
+                        if line.startswith("业务匹配项："):
+                            bus_str = line.replace("业务匹配项：", "").strip()
+                            if bus_str and bus_str != "无":
+                                business = [b.strip() for b in bus_str.split(',')]
+
+                    if classify == "充值":
+                        context.user_data['pending_charge'] = 'select_method'
+                        await update.message.reply_text(
+                            "选择充值方式",
+                            reply_markup=InlineKeyboardMarkup([
+                                [InlineKeyboardButton("OkPay", callback_data="okpay_pay")],
+                                [InlineKeyboardButton("人民币", url="https://t.me/vipcdw")]
+                            ])
+                        )
+                    elif classify == "AI匹配":
+                        context.user_data['ai_state'] = 'awaiting_input'
+                        await update.message.reply_text("🤖 AI 匹配已开启，请更具体地描述你想查什么")
+                    elif classify == "业务匹配":
+                        if business:
+                            keyboard = [[InlineKeyboardButton(s, callback_data=s)] for s in business]
+                            keyboard.append([InlineKeyboardButton("⬅️ 返回菜单", callback_data="返回菜单")])
+                            await update.message.reply_text("🔍 为你找到以下类似选项：", reply_markup=InlineKeyboardMarkup(keyboard))
+                        else:
+                            await update.message.reply_text("❌ 未能匹配到具体业务。")
+                    else:
+                        await update.message.reply_text("❌ 未能理解您的需求。")
+                else:
+                    await update.message.reply_text("❌ AI 接口超时。")
+        except Exception:
+            await update.message.reply_text("❌ AI 请求失败。")
+        context.user_data.pop('ai_state', None)
+        return
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("recharge", recharge_command))
+    application.add_handler(CommandHandler("ai", ai_command))
+    application.add_handler(CallbackQueryHandler(button_click))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return application
