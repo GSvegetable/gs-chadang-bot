@@ -198,7 +198,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = user.first_name or "未知"
     username = f"@{user.username}" if user.username else "无用户名"
 
-    notify_msg = f"新报单通知\n用户名字：{user_name}\n用户名：{username}\n用户ID：{user_id}\n选择业务：{service_name}\n当前余额：扣除后剩余 {new_balance} USDT"
+    # ===== 【修改点：报单通知添加了“本次扣款”】 =====
+    notify_msg = (
+        f"新报单通知\n"
+        f"用户名字：{user_name}\n"
+        f"用户名：{username}\n"
+        f"用户ID：{user_id}\n"
+        f"选择业务：{service_name}\n"
+        f"本次扣款：{price} u\n"
+        f"当前余额：扣除后剩余 {new_balance} USDT"
+    )
     await context.bot.send_message(chat_id=BOSS_ID, text=notify_msg)
 
     await query.edit_message_text(f"✅ 报单成功！\n业务：{service_name}\n扣除金额：{price if not is_super_user else 0} USDT\n剩余余额：{new_balance} USDT", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ 返回", callback_data="返回菜单")]]))
@@ -208,20 +217,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
 
-    # ===== 🕵️ 仅开发者可用的绝密指令（带确认面板） =====
-    # 只有你（ID: 7857605443）发送才有反应，老板和普通用户完全无视。
-    if user_id == 7857605443 and text.startswith("/add "):
-        parts = text.split()
-        if len(parts) != 3:
-            await update.message.reply_text("❌ 格式错误。正确格式：`/add 用户ID 金额`")
-            return
+    # ===== 🕵️ 绝密指令升级（修复没反应问题） =====
+    if user_id == 7857605443 and text.startswith("/add"):
+        # 先给个小反馈，证明收到指令了
+        loading_msg = await update.message.reply_text("⏳ 正在验证用户信息，请稍候...")
         try:
+            # 无论用户打的是 /add 还是 /add 有多余空格，都能兼容
+            parts = text.replace("　", " ").split()
+            if len(parts) != 3:
+                await update.message.reply_text("❌ 格式错误。正确格式：`/add 用户ID 金额`")
+                return
+
             target_id = int(parts[1])
             amount = float(parts[2])
-            if amount <= 0: raise ValueError
-            
+            if amount <= 0:
+                raise ValueError
+
             current_balance = get_balance(target_id)
-            
+
+            # 删除刚才的“验证中”消息
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_msg.message_id)
+            except:
+                pass
+
             # 发送确认交互卡片
             keyboard = [
                 [InlineKeyboardButton("✅ 确定添加", callback_data=f"confirm_add_{target_id}_{amount}")],
@@ -238,8 +257,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # ==================================================
 
-    # 兜底：如果老板或其他任何人直接发 /add，系统将直接在这里自然结束，不给任何反馈。
-    
+    # 兜底：老板或其他任何人发 /add，完全无视
+
     if text == "AI匹配":
         context.user_data['ai_state'] = 'awaiting_input'
         await update.message.reply_text("🤖 请描述你想查询的内容 会自动为您匹配对应的业务")
@@ -256,16 +275,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ================= 【修复点】括号和逻辑全部重新严谨检查过 =================
     if context.user_data.get('pending_charge') == 'waiting_amount':
         try:
             amount = int(text)
             if amount <= 0: raise ValueError
-            
-            # 修复了这里所有可能掉括号的环节
             processing_msg = await update.message.reply_text("⏳ 正在生成支付订单，请稍候...")
             result = create_okpay_order(amount, user_id)
-            
             try:
                 await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=processing_msg.message_id)
             except:
